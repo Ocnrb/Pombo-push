@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+
+# Secrets (FCM service account keys must never be committed)
+*service-account*.json
+*adminsdk*.json
+
+# Database
+data/
+*.db
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

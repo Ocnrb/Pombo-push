@@ -1,0 +1,29 @@
+{
+  "name": "pombo-relay",
+  "version": "1.0.0",
+  "description": "Push notification relay for Pombo - run your own!",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "generate-keys": "node scripts/generate-keys.js",
+    "test": "node scripts/test-push.js"
+  },
+  "keywords": [
+    "pombo",
+    "push-notifications",
+    "streamr",
+    "decentralized",
+    "web3"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@streamr/sdk": "^103.3.2",
+    "better-sqlite3": "^11.0.0",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.0",
+    "firebase-admin": "^12.7.0",
+    "web-push": "^3.6.7"
+  }
+}
