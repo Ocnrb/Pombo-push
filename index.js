@@ -14,6 +14,7 @@ import { ethers } from 'ethers';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import nodeCrypto from 'crypto';
 import { EventEmitter } from 'events';
 
 // Increase max listeners to prevent memory leak warnings from Streamr SDK
@@ -458,6 +459,49 @@ try {
 // differentiating by the 'type' field of the message.
 
 /**
+ * Open a sealed registration envelope: { type:'sealed', v:1, epk, ct, iv }.
+ *
+ * Clients seal the registration payload to this relay's static public key
+ * (published in the push stream's on-chain metadata) with an EPHEMERAL
+ * sender key — the endpoint/FCM token never crosses the observable stream
+ * in the clear, and the envelope names no account. Same construction as the
+ * clients' dmCrypto sealed sender, with its own HKDF salt (domain
+ * separation): AES key = HKDF-SHA256(X coord of ECDH(relayPriv, epk),
+ * salt 'pombo-push-sealed-v1', info 'aes-256-gcm'); WebCrypto appends the
+ * GCM auth tag to the ciphertext, so it is split back off here.
+ *
+ * @returns {object|null} The inner payload, or null (invalid/not for us)
+ */
+function openSealedEnvelope(envelope) {
+    try {
+        if (!envelope || envelope.v !== 1 || typeof envelope.epk !== 'string'
+            || typeof envelope.ct !== 'string' || typeof envelope.iv !== 'string') {
+            return null;
+        }
+        const ecdh = nodeCrypto.createECDH('secp256k1');
+        ecdh.setPrivateKey(Buffer.from(config.relayPrivateKey.replace(/^0x/, ''), 'hex'));
+        const secret = ecdh.computeSecret(Buffer.from(envelope.epk.replace(/^0x/, ''), 'hex'));
+        const key = Buffer.from(nodeCrypto.hkdfSync(
+            'sha256', secret,
+            Buffer.from('pombo-push-sealed-v1'), Buffer.from('aes-256-gcm'), 32));
+        const ct = Buffer.from(envelope.ct, 'base64');
+        const iv = Buffer.from(envelope.iv, 'base64');
+        if (ct.length <= 16 || iv.length !== 12) return null;
+        const decipher = nodeCrypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(ct.subarray(ct.length - 16));
+        const plain = Buffer.concat([
+            decipher.update(ct.subarray(0, ct.length - 16)),
+            decipher.final()
+        ]);
+        return JSON.parse(plain.toString('utf8'));
+    } catch (e) {
+        console.log('⚠️  Sealed envelope failed to open:', e.message);
+        logEvent('sealed_open_error', e.message);
+        return null;
+    }
+}
+
+/**
  * Handle new device registration
  */
 function handleRegistration(payload) {
@@ -549,8 +593,22 @@ try {
             }
             
             // Identify message type by 'type' field
-            if (content.type === 'registration') {
-                handleRegistration(content);
+            if (content.type === 'sealed') {
+                const inner = openSealedEnvelope(content);
+                if (inner && inner.type === 'registration') {
+                    console.log('🔒 Sealed registration opened');
+                    logEvent('sealed_registration', inner.tag);
+                    handleRegistration(inner);
+                } else if (inner) {
+                    console.log('⚠️  Sealed envelope with unexpected inner type:', inner.type);
+                }
+            } else if (content.type === 'registration') {
+                // Sealed-only since 2026-08-20: a plaintext registration is a
+                // pre-cutover client — the endpoint must not be stored off an
+                // unprotected read, and accepting it would keep the downgrade
+                // path alive.
+                console.log('⚠️  Plaintext registration dropped (sealed-only)');
+                logEvent('registration_dropped_plaintext', content.tag || 'no_tag');
             } else if (content.type === 'notification' || content.tag) {
                 // If no type but has tag, it's a notification
                 await handleNotification(content);
